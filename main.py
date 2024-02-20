@@ -126,7 +126,7 @@ async def get_games_info(games: list):
 
         if counter >= 4:
             games_format_data.extend(await asyncio.gather(*running_tasks, return_exceptions=True))
-            await asyncio.sleep(5.5)
+            await asyncio.sleep(5.6)
             running_tasks.clear()
             counter = 0
 
