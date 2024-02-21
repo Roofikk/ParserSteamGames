@@ -18,7 +18,9 @@ parser.add_argument('-b', '--below', type=int, help='The lower limit of the pars
 parser.add_argument('-q', '--quantity-write', type=int,
                     help='Which quantity parsing entry for writing json file, default: 1000')
 parser.add_argument('-f', '--file', type=str,
-                    help='Any full path to json file which was created on last parses, default: takes from url request')
+                    help='Path to any json file which was created on last parses. '
+                         'The path can be either from the root of the program or the full path. '
+                         'Default: takes from url request')
 parser.add_argument('-r', '--repeat', action='store_true',
                     help='Flag for trying repeat parse games which could not be accessed at the moment of parsing, '
                          'default: flag is false')
@@ -35,7 +37,11 @@ os.makedirs(path_dir_games)
 os.makedirs(path_dir_failed_games)
 
 # logging setting
-logging.basicConfig(filename=f'logs-{now}.log', encoding='utf-8',
+name_dir_logs = 'logs'
+if os.path.isdir('logs') is False:
+    os.mkdir('logs')
+
+logging.basicConfig(filename=os.path.join('logs', f'logs-{now}.log'), encoding='utf-8',
                     format='%(asctime)s.%(msecs)03d %(message)s', datefmt='%d-%m-%Y %H:%M:%S', level=logging.DEBUG)
 
 def get_all_games():
@@ -141,12 +147,12 @@ def format_game_data(game_id, response):
 
 
 async def get_game_data(game_id: str):
-    session_timeout = aiohttp.ClientTimeout(total=None, sock_connect=5, sock_read=5)
+    session_timeout = aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=10)
     try:
         async with aiohttp.ClientSession(timeout=session_timeout) as session:
             headers = {'Accept-Language': 'en-US'}
             async with session.get(f"https://store.steampowered.com/api/appdetails?appids={game_id}",
-                                   allow_redirects=False, timeout=5, headers=headers) as response:
+                                   allow_redirects=False, timeout=10, headers=headers) as response:
                 if response.status == 429:
                     logging.warning("Too many requests")
                     return {'appid': game_id, 'success': False, 'reason': 'too many requests'}
@@ -190,28 +196,40 @@ async def write_games_info(games: list, below: int, above: int, quantity_write: 
     failed_games_list = []
 
     game_counter = 0
-
+    task_counter = 0
+    tasks = []
+    max_step = 10
     for index in tqdm(range(below, above), desc='main',
                       bar_format='{l_bar}{bar:30}{r_bar}{bar:-10b}', position=0):
-        game_id = str(games[index]["appid"])
-
-        logging.debug(f'Getting game: {game_id}')
-        response = await get_game_data(game_id)
-        await asyncio.sleep(1)
+        task_counter += 1
         game_counter += 1
+        tasks.append(get_game_data(str(games[index]["appid"])))
 
-        try_get_game_id = response.get(game_id, '')
+        if task_counter < max_step and index < above - 1:
+            continue
 
-        if try_get_game_id != '':
-            games_format_data_dict.update(response)
-        else:
-            failed_games_list.append(response)
+        response_games = await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.sleep(13)
 
-        if game_counter >= quantity_write:
+        for game in response_games:
+            check_failed_game = game.get('appid', '')
+
+            if check_failed_game == '':
+                games_format_data_dict.update(game)
+            else:
+                failed_games_list.append(game)
+
+        if game_counter >= quantity_write or index == above - 1:
             if config['repeat']:
-                result = await repeat_get_games(failed_games_list)
+                # ready list games for repeat requests
+                for_repeat = [game for game in failed_games_list
+                              if game['reason'] != 'is not game' and game['reason'] != 'not released']
+
+                failed_games_list = [fail for fail in failed_games_list if fail not in for_repeat]
+
+                result = await repeat_get_games(for_repeat)
                 games_format_data_dict.update(result['success'])
-                failed_games_list = result['failed']
+                failed_games_list.extend(result['failed'])
 
             write_json_file(games_format_data_dict, os.path.join(path_dir_games, str(uuid.uuid4()) + '.json'))
             games_format_data_dict.clear()
@@ -221,71 +239,26 @@ async def write_games_info(games: list, below: int, above: int, quantity_write: 
 
             game_counter = 0
 
-    # for task in tqdm(tasks):
-    #     running_tasks.append(task)
-    #     task_counter += 1
-    #     game_counter += 1
-    #
-    #     if task_counter >= 4:
-    #         response_games = await asyncio.gather(*running_tasks, return_exceptions=True)
-    #
-    #         games_dict = {}
-    #         for g in response_games:
-    #             games_dict.update(g)
-    #
-    #         failed_games = {game_id: games_dict[game_id] for game_id in games_dict if games_dict[game_id]['success'] == False}
-    #         failed_games_dict.update(failed_games)
-    #
-    #         success_games = {game_id: games_dict[game_id] for game_id in games_dict if games_dict[game_id]['success'] == True}
-    #         games_format_data_dict.update(success_games)
-    #
-    #         await asyncio.sleep(5.55)
-    #         running_tasks.clear()
-    #         task_counter = 0
-    #
-    #     if game_counter >= quantity_write:
-    #         write_json_file(games_format_data_dict, os.path.join(path_dir_games, str(uuid.uuid4()) + '.json'))
-    #         games_format_data_dict.clear()
-    #
-    #         write_json_file(failed_games_dict, os.path.join(path_dir_failed_games, str(uuid.uuid4()) + '.json'))
-    #         failed_games_dict.clear()
-    #
-    #         game_counter = 0
-
-    if len(games_format_data_dict) > 0:
-        write_json_file(games_format_data_dict, os.path.join(path_dir_games, str(uuid.uuid4()) + '.json'))
-
-    if len(failed_games_list) > 0:
-        write_json_file(failed_games_list, os.path.join(path_dir_failed_games, str(uuid.uuid4()) + '.json'))
+        task_counter = 0
+        tasks.clear()
 
 
-# while not used
 async def repeat_get_games(games: list):
     logging.debug('Repeat getting failed games')
     again_failed = []
     success_games = {}
 
-    while True:
-        for raw_game in tqdm(games, desc='repeat',
-                             bar_format='{l_bar}{bar:30}{r_bar}{bar:-10b}', position=1, leave=False):
-            format_game = await get_game_data(raw_game['appid'])
-            await asyncio.sleep(1)
+    for raw_game in tqdm(games, desc='repeat',
+                         bar_format='{l_bar}{bar:30}{r_bar}{bar:-10b}', position=1, leave=False):
+        format_game = await get_game_data(raw_game['appid'])
+        await asyncio.sleep(1)
 
-            try_game_id = format_game.get(raw_game['appid'], '')
+        try_game_id = format_game.get(raw_game['appid'], '')
 
-            if try_game_id == '':
-                again_failed.append(format_game)
-            else:
-                success_games.update(format_game)
-
-        if len(again_failed) == len(games):
-            break
-
-        again_failed_game_ids = {game['appid'] for game in again_failed}
-        failed_game_ids = {game['appid'] for game in games}
-        intersection_keys = failed_game_ids & again_failed_game_ids
-        games = [game for game in games if game['appid'] in intersection_keys]
-        again_failed.clear()
+        if try_game_id == '':
+            again_failed.append(format_game)
+        else:
+            success_games.update(format_game)
 
     return {'success': success_games, 'failed': again_failed}
 
@@ -305,7 +278,6 @@ def get_json_file(path_file: str):
 
 
 async def main():
-    games = []
     logging.info(f'Program started with params:\n'
                  f'\t\t\t\tabove: {config['above']}\n'
                  f'\t\t\t\tbelow: {config['below']}\n'
