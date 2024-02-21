@@ -44,6 +44,7 @@ if os.path.isdir('logs') is False:
 logging.basicConfig(filename=os.path.join('logs', f'logs-{now}.log'), encoding='utf-8',
                     format='%(asctime)s.%(msecs)03d %(message)s', datefmt='%d-%m-%Y %H:%M:%S', level=logging.DEBUG)
 
+
 def get_all_games():
     games_url = "https://api.steampowered.com/ISteamApps/GetAppList/v2?format=json"
     response_json = requests.get(games_url).json()
@@ -60,10 +61,10 @@ def format_game_data(game_id, response):
     game_json = dict(response[game_id])
 
     if "success" in game_json.keys():
-        if game_json["success"] == False:
+        if not game_json["success"]:
             return {'appid': game_id, 'success': False, 'reason': game_json.get('reason', 'unknown')}
 
-    game_data = dict(game_json.get('data'))
+    game_data = dict(game_json.get('data', {}))
 
     # Проверка на тип приложения
     if game_data["type"] != "game":
@@ -71,7 +72,7 @@ def format_game_data(game_id, response):
 
     # также нужна проверка на релизную игру
     if 'coming_soon' in game_data['release_date'].keys():
-        if game_data['release_date']['coming_soon'] == True:
+        if game_data['release_date']['coming_soon']:
             return {'appid': game_id, 'success': False, 'reason': 'not released'}
 
     my_data = {game_id: {
@@ -162,11 +163,11 @@ async def get_game_data(game_id: str):
                 if response.status == 200:
                     return format_game_data(game_id, json.loads(text))
                 else:
-                    message = (f'Try getting game: {game_id}\n'
-                               f'Bad request with status code: {response.status}\n'
-                               f'Response text: {text}')
-                    logging.error(message)
-                    return {'appid': game_id, 'success': False, 'reason': message}
+                    response_message = (f'Try getting game: {game_id}\n'
+                                        f'Bad request with status code: {response.status}\n'
+                                        f'Response text: {text}')
+                    logging.error(response_message)
+                    return {'appid': game_id, 'success': False, 'reason': response_message}
     except asyncio.TimeoutError as e:
         logging.warning(f"TimeoutError on game_id: {game_id}")
         return {'appid': game_id, 'success': False, 'reason': 'timeout error'}
@@ -174,19 +175,19 @@ async def get_game_data(game_id: str):
 
 async def write_games_info(games: list, below: int, above: int, quantity_write: int):
     if above <= below:
-        message = '"above" value cannot be less or equal "below"'
-        logging.error(message)
-        raise Exception(message)
+        exception_message = '"above" value cannot be less or equal "below"'
+        logging.error(exception_message)
+        raise Exception(exception_message)
 
     if below >= len(games):
-        message = '"below" value cannot be greater than games amount'
-        logging.error(message)
-        raise Exception(message)
+        exception_message = '"below" value cannot be greater than games amount'
+        logging.error(exception_message)
+        raise Exception(exception_message)
 
     if quantity_write <= 0:
-        message = '"quantity_write" value cannot be less or equal zero. Recommended value gather 500'
-        logging.error(message)
-        raise Exception(message)
+        exception_message = '"quantity_write" value cannot be less or equal zero. Recommended value gather 500'
+        logging.error(exception_message)
+        raise Exception(exception_message)
 
     games_format_data_dict = {}
     failed_games_list = []
