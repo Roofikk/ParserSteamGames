@@ -116,11 +116,8 @@ def format_game_data(game_id, response):
         soup = BeautifulSoup(game_data["pc_requirements"][req], "html.parser")
         bb_ul = soup.find("ul", class_="bb_ul")
         lis = bb_ul.find_all("li")
-        # items = []
-        # items = [li.text.strip() for li in lis]
 
         reqs[req] = {}
-
         os_bit_version = lis[0].text
 
         if len(os_bit_version.split(':')) < 2:
@@ -135,8 +132,6 @@ def format_game_data(game_id, response):
 
             key = li_split[0].replace('*', '').strip()
             reqs[req][key] = li_split[1].strip()
-
-        # reqs[req] = items
 
     my_data[game_id]["requirements"] = reqs
     return my_data
