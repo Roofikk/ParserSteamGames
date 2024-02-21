@@ -1,5 +1,8 @@
 import argparse
 import logging
+import time
+
+from tqdm.auto import tqdm
 
 parser = argparse.ArgumentParser(description='Steam Parser', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('-a', '--above', type=int, help='The upper limit of the parsing list, default: max')
@@ -16,8 +19,8 @@ logging.basicConfig(filename='logs.log', encoding='utf-8',
 if __name__ == '__main__':
     args = parser.parse_args()
     config = vars(args)
-    logging.debug("A DEBUG Message")
-    logging.info("An INFO")
-    logging.warning("A WARNING")
-    logging.error("An ERROR")
-    logging.critical("A message of CRITICAL severity")
+
+    for i1 in tqdm(range(300), desc='main', position=0):
+        for i2 in tqdm(range(300), desc='inner', position=1, leave=False):
+            time.sleep(0.01)
+        time.sleep(5)

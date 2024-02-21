@@ -17,8 +17,11 @@ parser.add_argument('-a', '--above', type=int, help='The upper limit of the pars
 parser.add_argument('-b', '--below', type=int, help='The lower limit of the parsing list, default: 0')
 parser.add_argument('-q', '--quantity-write', type=int,
                     help='Which quantity parsing entry for writing json file, default: 1000')
-parser.add_argument('-f', '--file', action='store_true',
-                    help='Flag for getting the entries from the last parsing json file, default: takes from url request')
+parser.add_argument('-f', '--file', type=str,
+                    help='Any full path to json file which was created on last parses, default: takes from url request')
+parser.add_argument('-r', '--repeat', action='store_true',
+                    help='Flag for trying repeat parse games which could not be accessed at the moment of parsing, '
+                         'default: flag is false')
 args = parser.parse_args()
 config = vars(args)
 
@@ -44,25 +47,25 @@ def get_all_games():
 def format_game_data(game_id, response):
     if response is None:
         logging.info(f"Couldn't get game info by id: {game_id}")
-        return {game_id: {'success': False, 'reason': 'unknown'}}
+        return {'appid': game_id, 'success': False, 'reason': 'unknown'}
 
     game_json = dict(response[game_id])
 
     if "success" in game_json.keys():
         if game_json["success"] == False:
-            return {game_id: {'success': False, 'reason': game_json.get('reason', 'unknown')}}
+            return {'appid': game_id, 'success': False, 'reason': game_json.get('reason', 'unknown')}
 
     game_data = dict(game_json.get('data'))
 
     # Проверка на тип приложения
     if game_data["type"] != "game":
-        return {game_id: {'success': False, 'reason': 'is not game'}}
+        return {'appid': game_id, 'success': False, 'reason': 'is not game'}
 
     # также нужна проверка на релизную игру
 
     if 'coming_soon' in game_data['release_date'].keys():
         if game_data['release_date']['coming_soon'] == True:
-            return {game_id: {'success': False, 'reason': 'not released'}}
+            return {'appid': game_id, 'success': False, 'reason': 'not released'}
 
     my_data = {game_id: {
         "success": True,
@@ -114,7 +117,7 @@ def format_game_data(game_id, response):
     reqs = {}
     for req in game_data.get('pc_requirements', []):
         soup = BeautifulSoup(game_data["pc_requirements"][req], "html.parser")
-        bb_ul = soup.find("ul", class_="bb_ul")
+        bb_ul = soup.find("ul")
         lis = bb_ul.find_all("li")
 
         reqs[req] = {}
@@ -146,7 +149,7 @@ async def get_game_data(game_id: str):
                                    allow_redirects=False, timeout=5, headers=headers) as response:
                 if response.status == 429:
                     logging.warning("Too many requests")
-                    return {game_id: {'success': False, 'reason': 'too many requests'}}
+                    return {'appid': game_id, 'success': False, 'reason': 'too many requests'}
 
                 text = await response.text()
 
@@ -157,10 +160,10 @@ async def get_game_data(game_id: str):
                                f'Bad request with status code: {response.status}\n'
                                f'Response text: {text}')
                     logging.error(message)
-                    return {game_id: {'success': False, 'reason': message}}
+                    return {'appid': game_id, 'success': False, 'reason': message}
     except asyncio.TimeoutError as e:
         logging.warning(f"TimeoutError on game_id: {game_id}")
-        return {game_id: {'success': False, 'reason': 'timeout error'}}
+        return {'appid': game_id, 'success': False, 'reason': 'timeout error'}
 
 
 # оптимальное количество запросов в секунду ~ 0.72-0,75 req/s
@@ -184,28 +187,37 @@ async def write_games_info(games: list, below: int, above: int, quantity_write: 
         raise Exception(message)
 
     games_format_data_dict = {}
-    failed_games_dict = {}
+    failed_games_list = []
 
     game_counter = 0
 
-    for index in tqdm(range(below, above), bar_format='{l_bar}{bar:50}{r_bar}{bar:-10b}'):
+    for index in tqdm(range(below, above), desc='main',
+                      bar_format='{l_bar}{bar:30}{r_bar}{bar:-10b}', position=0):
         game_id = str(games[index]["appid"])
+
         logging.debug(f'Getting game: {game_id}')
         response = await get_game_data(game_id)
         await asyncio.sleep(1)
         game_counter += 1
 
-        if response[game_id]['success']:
+        try_get_game_id = response.get(game_id, '')
+
+        if try_get_game_id != '':
             games_format_data_dict.update(response)
         else:
-            failed_games_dict.update(response)
+            failed_games_list.append(response)
 
         if game_counter >= quantity_write:
+            if config['repeat']:
+                result = await repeat_get_games(failed_games_list)
+                games_format_data_dict.update(result['success'])
+                failed_games_list = result['failed']
+
             write_json_file(games_format_data_dict, os.path.join(path_dir_games, str(uuid.uuid4()) + '.json'))
             games_format_data_dict.clear()
 
-            write_json_file(failed_games_dict, os.path.join(path_dir_failed_games, str(uuid.uuid4()) + '.json'))
-            failed_games_dict.clear()
+            write_json_file(failed_games_list, os.path.join(path_dir_failed_games, str(uuid.uuid4()) + '.json'))
+            failed_games_list.clear()
 
             game_counter = 0
 
@@ -243,28 +255,42 @@ async def write_games_info(games: list, below: int, above: int, quantity_write: 
     if len(games_format_data_dict) > 0:
         write_json_file(games_format_data_dict, os.path.join(path_dir_games, str(uuid.uuid4()) + '.json'))
 
-    if len(failed_games_dict) > 0:
-        write_json_file(failed_games_dict, os.path.join(path_dir_failed_games, str(uuid.uuid4()) + '.json'))
+    if len(failed_games_list) > 0:
+        write_json_file(failed_games_list, os.path.join(path_dir_failed_games, str(uuid.uuid4()) + '.json'))
 
 
 # while not used
-async def try_again_get_games(games: list):
+async def repeat_get_games(games: list):
+    logging.debug('Repeat getting failed games')
     again_failed = []
-    success_games = []
+    success_games = {}
 
-    for row_game in games:
-        format_game = await get_game_data(row_game)
-        await asyncio.sleep(0.65)
+    while True:
+        for raw_game in tqdm(games, desc='repeat',
+                             bar_format='{l_bar}{bar:30}{r_bar}{bar:-10b}', position=1, leave=False):
+            format_game = await get_game_data(raw_game['appid'])
+            await asyncio.sleep(1)
 
-        if format_game['success'] is False:
-            again_failed.append(format_game)
-        else:
-            success_games.append(format_game)
+            try_game_id = format_game.get(raw_game['appid'], '')
 
-    return {'successes': success_games, 'failed': again_failed}
+            if try_game_id == '':
+                again_failed.append(format_game)
+            else:
+                success_games.update(format_game)
+
+        if len(again_failed) == len(games):
+            break
+
+        again_failed_game_ids = {game['appid'] for game in again_failed}
+        failed_game_ids = {game['appid'] for game in games}
+        intersection_keys = failed_game_ids & again_failed_game_ids
+        games = [game for game in games if game['appid'] in intersection_keys]
+        again_failed.clear()
+
+    return {'success': success_games, 'failed': again_failed}
 
 
-def write_json_file(games_list: dict, path_file: str):
+def write_json_file(games_list, path_file: str):
     with open(path_file, 'w', encoding='utf-8') as f:
         json.dump(games_list, f, ensure_ascii=False, indent=4)
         f.close()
@@ -280,9 +306,17 @@ def get_json_file(path_file: str):
 
 async def main():
     games = []
+    logging.info(f'Program started with params:\n'
+                 f'\t\t\t\tabove: {config['above']}\n'
+                 f'\t\t\t\tbelow: {config['below']}\n'
+                 f'\t\t\t\tquantity_write: {config['quantity_write']}\n'
+                 f'\t\t\t\tfile: {config['file']}\n'
+                 f'\t\t\t\trepeat: {config['repeat']}\n')
 
-    if config['file']:
-        games = get_json_file(os.path.join(current_dir, 'games.json'))
+    path_json_file = config['file'] if config['file'] is not None else ''
+
+    if path_json_file != '':
+        games = get_json_file(path_json_file)
     else:
         games = get_all_games()
         write_json_file(games, os.path.join(current_dir, 'games.json'))
@@ -298,9 +332,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    a = config['above']
-    b = config['below']
-    q = config['quantity_write']
-    f = config['file']
-
     asyncio.run(main())
