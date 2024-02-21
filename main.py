@@ -51,6 +51,8 @@ def get_all_games():
 
 
 def format_game_data(game_id, response):
+    logging.info(f'Formatting game: {game_id}')
+
     if response is None:
         logging.info(f"Couldn't get game info by id: {game_id}")
         return {'appid': game_id, 'success': False, 'reason': 'unknown'}
@@ -68,7 +70,6 @@ def format_game_data(game_id, response):
         return {'appid': game_id, 'success': False, 'reason': 'is not game'}
 
     # также нужна проверка на релизную игру
-
     if 'coming_soon' in game_data['release_date'].keys():
         if game_data['release_date']['coming_soon'] == True:
             return {'appid': game_id, 'success': False, 'reason': 'not released'}
@@ -79,7 +80,7 @@ def format_game_data(game_id, response):
         'age': game_data.get('required_age', 0),
         "name": game_data.get("name"),
         'short_description': game_data.get('short_description', ''),
-        # здесь надо пройтись через bs. поскольку там разбросаны разные ссылки на видео и пр.
+        # здесь надо пройтись через bs4. поскольку там разбросаны разные ссылки на видео и пр.
         'long_description': game_data.get('about_the_game', ''),
         # через запятую
         # если нужно, могу разбить в список
@@ -91,8 +92,6 @@ def format_game_data(game_id, response):
         'website': game_data.get('website', ''),
         'header_image_uri': game_data.get('header_image', ''),
         'screenshots': game_data.get('screenshots', []),
-        # надо еще сделать проверку платформы
-        # ---------
     }}
 
     # get release date
@@ -147,6 +146,7 @@ def format_game_data(game_id, response):
 
 
 async def get_game_data(game_id: str):
+    logging.info(f'Getting game: {game_id}')
     session_timeout = aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=10)
     try:
         async with aiohttp.ClientSession(timeout=session_timeout) as session:
@@ -172,10 +172,6 @@ async def get_game_data(game_id: str):
         return {'appid': game_id, 'success': False, 'reason': 'timeout error'}
 
 
-# оптимальное количество запросов в секунду ~ 0.72-0,75 req/s
-# насколько я понял, рефреш запросов происходит каждые 8 минут, но я могу ошибаться.
-# по расчетам получается можно выполнить за раз сразу ~350 запросов и потом уйти на 8-ми минутный перекур
-# такое я не проверял...
 async def write_games_info(games: list, below: int, above: int, quantity_write: int):
     if above <= below:
         message = '"above" value cannot be less or equal "below"'
@@ -288,8 +284,10 @@ async def main():
     path_json_file = config['file'] if config['file'] is not None else ''
 
     if path_json_file != '':
+        logging.info(f'Getting list of games from file {path_json_file}')
         games = get_json_file(path_json_file)
     else:
+        logging.info(f'Getting list of games from url')
         games = get_all_games()
         write_json_file(games, os.path.join(current_dir, 'games.json'))
 
@@ -304,4 +302,7 @@ async def main():
 
 
 if __name__ == "__main__":
+    message = f'Program has been run at {now}\n'
+    print(message)
+    logging.info(message)
     asyncio.run(main())
