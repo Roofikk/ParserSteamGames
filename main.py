@@ -155,13 +155,14 @@ async def get_game_data(game_id: str):
             async with session.get(f"https://store.steampowered.com/api/appdetails?appids={game_id}",
                                    allow_redirects=False, timeout=10, headers=headers) as response:
                 if response.status == 429:
-                    logging.warning("Too many requests")
+                    logging.warning(f"Too many requests: {game_id}")
                     return {'appid': game_id, 'success': False, 'reason': 'too many requests'}
 
                 text = await response.text()
 
                 if response.status == 200:
-                    return format_game_data(game_id, json.loads(text))
+                    response_json = json.loads(text)
+                    return format_game_data(game_id, response_json)
                 else:
                     response_message = (f'Try getting game: {game_id}\n'
                                         f'Bad request with status code: {response.status}\n'
