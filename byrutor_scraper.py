@@ -19,12 +19,13 @@ async def get_request(uri: str):
             async with session.get(uri, headers=headers, allow_redirects=True, timeout=10) as response:
                 if response.status == 200 or response.status == 301:
                     return await response.text()
-    except asyncio.TimeoutError as e:
+    except asyncio.TimeoutError:
         logging.warning(f'Timeout error: {uri}')
         return None
     except aiohttp.ClientConnectorError:
         logging.warning(f'Connection failed: {uri}')
         return None
+
 
 async def get_game_data(uri: str):
     try_count = 0
@@ -38,26 +39,21 @@ async def get_game_data(uri: str):
         await asyncio.sleep(1)
 
     logging.warning(f'The game page does not opened: {uri}')
-    return None
+    return {'success': False, 'uri': uri, 'message': 'The game page does not opened'}
 
 
 async def get_game_links_from_page(uri: str):
     try_count = 0
-    html_text = None
 
     while try_count < 5:
         html_text = await get_request(uri)
         if html_text is not None:
-            break
+            return scrape_game_links(html_text)
         try_count += 1
         await asyncio.sleep(1)
 
-    if html_text is None:
-        logging.warning(f'The page does not open: {uri}')
-        return None
-
-    logging.info(f'The page has been opened: {uri}')
-    return scrape_game_links(html_text)
+    logging.warning(f'The page does not open: {uri}')
+    return list()
 
 
 def scrape_game_links(html_text: str):
@@ -141,8 +137,6 @@ def scrape_game_info(html_text: str, uri: str):
                 game_info['developers'] = span.next_sibling.text.strip()
             case 'Интерфейс:':
                 sib = span.next_sibling
-                text = ''
-
                 while True:
                     text = sib.text.strip()
                     if text == '' or text.find('class') > 0:
@@ -176,11 +170,11 @@ def scrape_game_info(html_text: str, uri: str):
     soup_game_size = soup.find('div', class_='persize_bottom')
     if soup_game_size is not None:
         size_text = soup_game_size.find('span')
-        # убрал регулярку на вытягивание только числа, потому что некоторые игры считаются в Мб.
+        # Убрал регулярку на вытягивание только числа, потому что некоторые игры считаются в Мб.
         # size_match = re.search(r'^[0-9,.]+', size_text.text)
-        game_info['torrent_size'] = float(size_text.text.strip())
+        game_info['torrent_size'] = size_text.text.strip()
     else:
-        game_info['torrent_size'] = float(-1)
+        game_info['torrent_size'] = ""
 
     # getting requirements
     if len(tech_details_blocks) > 1:
@@ -197,6 +191,7 @@ def scrape_game_info(html_text: str, uri: str):
     else:
         game_info['requirements'] = []
 
+    game_info['success'] = True
     logging.info(f'Game has been scraped: {game_info['name']}')
     return game_info
 
@@ -221,40 +216,71 @@ async def main():
     for page_count in tqdm(range(1, last_page + 1), desc='get game links',
                            bar_format='{l_bar}{bar:30}{r_bar}{bar:-10b}', position=0):
         uri = f'https://thebyrut.org/page/{page_count}/'
-        games_links.extend(await get_game_links_from_page(uri))
+        links = await get_game_links_from_page(uri)
 
+        if len(links) > 0:
+            games_links.extend(links)
+        else:
+            logging.error(f'Page: {page_count}, uri: {uri} does not opened')
+
+    logging.info(f'Получилось взять {len(games_links)} игр')
     games_links = list(dict.fromkeys(games_links))
+    logging.info(f'С отсеиванием одинаковых ссылок осталось игр: {len(games_links)}')
+
+    written_count_games = 0
+
     count_game_for_write = 1200
-    game_index = 0
+    count_game_for_scrape = 24
+    index_for_write = 0
+    index_for_scrape = 0
+
     games_for_json_write = []
+    failure_games_for_write = []
     get_games_tasks = []
 
-    for link in tqdm(games_links, desc='format games',
-                     bar_format='{l_bar}{bar:30}{r_bar}{bar:-10b}', position=0):
-        get_games_tasks.append(get_game_data(link))
-        game_index += 1
+    for index in tqdm(range(0, len(games_links)), desc='format games',
+                      bar_format='{l_bar}{bar:30}{r_bar}{bar:-10b}', position=0):
+        get_games_tasks.append(get_game_data(games_links[index]))
 
-        if game_index >= count_game_for_write:
+        if index_for_scrape >= count_game_for_scrape or index + 1 >= len(games_links):
             games = await asyncio.gather(*get_games_tasks, return_exceptions=True)
 
-            games = [game for game in games if game is not None]
-            games_for_json_write.extend(games)
+            success_games = [game for game in games if game['success'] is True]
+            written_count_games += len(success_games)
 
-            write_json_file(games_for_json_write, os.path.join(dir_games_path, str(uuid.uuid4()) + '.json'))
-            games_for_json_write.clear()
+            failure_games = [game for game in games if game['success'] is False]
+
+            games_for_json_write.extend(success_games)
+            failure_games_for_write.extend(failure_games)
+
+            index_for_scrape = 0
             get_games_tasks.clear()
-            game_index = 0
+            await asyncio.sleep(4)
 
-    if len(games_for_json_write) > 0:
-        write_json_file(games_for_json_write, os.path.join(dir_games_path, str(uuid.uuid4()) + '.json'))
-        games_for_json_write.clear()
+        if index_for_write >= count_game_for_write or index + 1 >= len(games_links):
+            write_json_file(games_for_json_write, os.path.join(dir_success_games, str(uuid.uuid4()) + '.json'))
+            if len(failure_games_for_write) > 0:
+                write_json_file(failure_games_for_write, os.path.join(dir_failure_games, str(uuid.uuid4()) + '.json'))
+
+            games_for_json_write.clear()
+            failure_games_for_write.clear()
+            index_for_write = 0
+
+        index_for_scrape += 1
+        index_for_write += 1
+
+    logging.info(f"Было записано игр: {written_count_games} из {len(games_links)}")
 
 
 if __name__ == '__main__':
     now = datetime.now().strftime('%d-%m-%Y %H-%M-%S')
     outputs_dir = os.path.join(os.getcwd(), 'outputs', 'byrutor')
     dir_games_path = os.path.join(outputs_dir, now)
-    os.makedirs(dir_games_path)
+
+    dir_success_games = os.path.join(dir_games_path, 'success')
+    dir_failure_games = os.path.join(dir_games_path, 'failure')
+    os.makedirs(dir_success_games)
+    os.makedirs(dir_failure_games)
 
     logging.basicConfig(filename=os.path.join(dir_games_path, f'logs-{now}.log'), encoding='utf-8',
                         format='%(asctime)s.%(msecs)03d %(message)s', datefmt='%d-%m-%Y %H:%M:%S', level=logging.DEBUG)

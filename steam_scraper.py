@@ -29,7 +29,7 @@ config = vars(args)
 
 # output setting
 now = datetime.now().strftime('%d-%m-%Y %H-%M-%S')
-outputs_dir = os.path.join(os.getcwd(), 'outputs')
+outputs_dir = os.path.join(os.getcwd(), 'outputs', 'steam')
 current_dir = os.path.join(outputs_dir, now)
 path_dir_games = os.path.join(current_dir, 'successful')
 path_dir_failed_games = os.path.join(current_dir, 'failed')
@@ -98,7 +98,7 @@ def format_game_data(game_id, response):
     desc_text = get_description_text(html_description)
 
     # если надо будет только текст, то заменить на desc_text
-    my_data['long_description'] = html_description
+    my_data[game_id]['long_description'] = html_description
 
     # get release date
     release_date = game_data.get('release_date', {})
@@ -108,8 +108,8 @@ def format_game_data(game_id, response):
         my_data[game_id]['release_date'] = date
 
     # get genres
-    genres = [genre["description"] for genre in game_data.get('genres', [])]
-    my_data[game_id]["genres"] = genres
+    genres = [genre['description'] for genre in game_data.get('genres', [])]
+    my_data[game_id]['genres'] = genres
 
     # get categories
     categories = [category['description'] for category in game_data.get('categories', [])]
@@ -250,7 +250,8 @@ async def write_games_info(games: list, below: int, above: int, quantity_write: 
             genres_from_games = []
 
             for game in games_format_data_dict:
-                genres_from_games = list(set(genres_from_games) | set(game['genres']))
+                genres_from_games = genres_from_games + [genre for genre in games_format_data_dict[game]['genres']
+                                                         if genre not in genres_from_games]
 
             update_genres(genres_from_games)
 
@@ -274,7 +275,7 @@ async def repeat_get_games(games: list):
     for raw_game in tqdm(games, desc='repeat',
                          bar_format='{l_bar}{bar:30}{r_bar}{bar:-10b}', position=1, leave=False):
         format_game = await get_game_data(raw_game['appid'])
-        await asyncio.sleep(1)
+        await asyncio.sleep(1.1)
 
         try_game_id = format_game.get(raw_game['appid'], '')
 
@@ -295,6 +296,7 @@ def write_json_file(games_list, path_file: str):
 def read_json_file(path_file: str):
     if not os.path.exists(path_file):
         logging.warning(f'File not exists: {path_file}')
+        return None
 
     f = open(path_file, 'r', encoding='utf-8')
     json_data = json.load(f)
@@ -339,9 +341,12 @@ def scrape_genres(html: str):
 def update_genres(genres: list):
     path_genres_json_file = os.path.join(outputs_dir, 'genres.json')
     genres_from_file = read_json_file(path_genres_json_file)
-    all_genres = list(set(genres_from_file) | set(genres))
-    write_json_file(all_genres, path_genres_json_file)
-    return all_genres
+
+    if genres_from_file is not None:
+        genres = list(set(genres_from_file) | set(genres))
+
+    write_json_file(genres, path_genres_json_file)
+    return genres
 
 
 async def main():
